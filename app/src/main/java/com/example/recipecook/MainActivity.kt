@@ -477,8 +477,13 @@ private fun RecipeApp(
 private fun parseRecipeFromIntent(intent: Intent?): Recipe? {
   val data = intent?.data ?: return null
   if (intent.action != Intent.ACTION_VIEW) return null
-  if (data.scheme != "recipecook" || data.host != "recipe") return null
-  if (data.path?.startsWith("/open") != true) return null
+
+  val isCustomSchemeLink =
+    data.scheme == "recipecook" && data.host == "recipe" && data.path?.startsWith("/open") == true
+  val isHttpsLink =
+    data.scheme == "https" && data.host == "recipe-link.example" && data.path?.startsWith("/open") == true
+
+  if (!isCustomSchemeLink && !isHttpsLink) return null
 
   val title = data.getQueryParameter("title")?.trim().orEmpty()
   if (title.isBlank()) return null
@@ -489,8 +494,8 @@ private fun parseRecipeFromIntent(intent: Intent?): Recipe? {
 
 private fun buildRecipeDeepLink(recipe: Recipe): String {
   return Uri.Builder()
-    .scheme("recipecook")
-    .authority("recipe")
+    .scheme("https")
+    .authority("recipe-link.example")
     .appendPath("open")
     .appendQueryParameter("title", recipe.title)
     .appendQueryParameter("notes", recipe.notes)
