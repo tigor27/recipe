@@ -41,36 +41,40 @@ gradle wrapper
 ./gradlew test
 ```
 
-## Make SMS links open the app (Android App Links)
+## SMS Sharing with Clickable Deep Links
 
-SMS apps can auto-linkify `https://` URLs, but to open the app directly (instead of browser), Android must verify your domain.
+Share recipes via SMS with **clickable links** that open the Recipe app:
 
-1. The app currently uses links like:
+### How it works
 
-```text
-https://iicloud.tech/open?title=...&notes=...
-```
+1. **Generate clickable SMS link**
+   - Link format: `https://iicloud.tech/open?title=RecipeName&notes=Ingredients`
+   - SMS apps auto-detect and linkify `https://` URLs  (**blue, underlined, tappable**)
 
-2. Host this file on your domain at `https://iicloud.tech/.well-known/assetlinks.json`:
+2. **On first tap**
+   - Android shows "Open with" app chooser
+   - User selects "Recipe Cook" → "Always"
 
-```json
-[
-  {
-	"relation": ["delegate_permission/common.handle_all_urls"],
-	"target": {
-	  "namespace": "android_app",
-	  "package_name": "com.example.recipecook",
-	  "sha256_cert_fingerprints": [
-		"81:5B:46:FF:52:AF:20:5B:38:DE:56:4F:99:78:D0:B8:7C:BD:C6:CD:AB:03:FA:C5:51:26:4D:FB:30:71:B2:4B"
-	  ]
-	}
-  }
-]
-```
+3. **After first tap**
+   - Links open directly in Recipe app (no app chooser)
+   - No server setup or domain verification required
 
-3. Reinstall the app, then test:
+### Why this approach works (without server hosting)
+
+- ✅ Links are **clickable in SMS** (HTTPS is auto-linkified by SMS apps)
+- ✅ Opens **Recipe app directly** (Android intent resolution)
+- ✅ **No assetlinks.json or domain verification** needed
+- ✅ **No server setup** required
+- ℹ️ First tap may show app chooser (standard Android behavior
+
+### Testing
 
 ```bash
-adb shell am start -a android.intent.action.VIEW -d "https://iicloud.tech/open?title=Test&notes=Hello"
-```
+# HTTPS link (clickable in SMS, primary format)
+adb shell am start -a android.intent.action.VIEW \
+  -d "https://iicloud.tech/open?title=MyRecipe&notes=Ingredients"
 
+# Custom scheme fallback (not auto-linkified but works)
+adb shell am start -a android.intent.action.VIEW \
+  -d "recipecook://recipe/open?title=MyRecipe&notes=Ingredients"
+```
