@@ -142,4 +142,21 @@ class RecipeViewModel(
     selectedRecipe = mutableRecipes[random.nextInt(mutableRecipes.size)]
     return selectedRecipe
   }
+
+  fun showRecipeFromDeepLink(recipe: Recipe) {
+    val normalizedTitle = recipe.title.trim()
+    if (normalizedTitle.isBlank()) return
+
+    val normalizedRecipe = recipe.copy(
+      title = normalizedTitle,
+      notes = recipe.notes.trim()
+    )
+
+    val existingRecipe = mutableRecipes.firstOrNull {
+      it.title == normalizedRecipe.title && it.notes == normalizedRecipe.notes
+    }
+
+    val recipeToDisplay = existingRecipe ?: normalizedRecipe.also { mutableRecipes.add(it) }
+    selectedRecipe = recipeToDisplay
+  }
 }

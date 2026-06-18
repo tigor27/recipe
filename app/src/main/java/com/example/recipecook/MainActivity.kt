@@ -60,6 +60,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+  private var incomingDeepLinkRecipe by mutableStateOf<Recipe?>(null)
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
@@ -69,15 +71,23 @@ class MainActivity : ComponentActivity() {
     // full-screen selector.
     val testAutoSelectFirst = intent?.getBooleanExtra("test_auto_select_first", false) ?: false
     val testAutoPickRandom = intent?.getBooleanExtra("test_auto_pick_random", false) ?: false
+    incomingDeepLinkRecipe = parseRecipeFromIntent(intent)
 
     setContent {
       MaterialTheme {
         RecipeApp(
           initialAutoSelectFirst = testAutoSelectFirst,
-          initialAutoPickRandom = testAutoPickRandom
+          initialAutoPickRandom = testAutoPickRandom,
+          deepLinkRecipe = incomingDeepLinkRecipe
         )
       }
     }
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    incomingDeepLinkRecipe = parseRecipeFromIntent(intent)
   }
 }
 
@@ -85,7 +95,8 @@ class MainActivity : ComponentActivity() {
 private fun RecipeApp(
   recipeViewModel: RecipeViewModel = viewModel(),
   initialAutoSelectFirst: Boolean = false,
-  initialAutoPickRandom: Boolean = false
+  initialAutoPickRandom: Boolean = false,
+  deepLinkRecipe: Recipe? = null
 ) {
   var newTitle by rememberSaveable { mutableStateOf("") }
   var newNotes by rememberSaveable { mutableStateOf("") }
@@ -236,6 +247,11 @@ private fun RecipeApp(
     }
   }
 
+  // If app is launched from a recipe link, show that recipe immediately.
+  LaunchedEffect(deepLinkRecipe) {
+    deepLinkRecipe?.let { recipeViewModel.showRecipeFromDeepLink(it) }
+  }
+
   Scaffold(
     snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
   ) { innerPadding ->
@@ -370,6 +386,8 @@ private fun RecipeApp(
                 append("\n")
                 append(recipe.notes)
               }
+              append("\n\nOpen in app: ")
+              append(buildRecipeDeepLink(recipe))
             }
 
             // If we already have SEND_SMS permission, send programmatically
@@ -454,6 +472,30 @@ private fun RecipeApp(
       }
     }
   }
+}
+
+private fun parseRecipeFromIntent(intent: Intent?): Recipe? {
+  val data = intent?.data ?: return null
+  if (intent.action != Intent.ACTION_VIEW) return null
+  if (data.scheme != "recipecook" || data.host != "recipe") return null
+  if (data.path?.startsWith("/open") != true) return null
+
+  val title = data.getQueryParameter("title")?.trim().orEmpty()
+  if (title.isBlank()) return null
+
+  val notes = data.getQueryParameter("notes")?.trim().orEmpty()
+  return Recipe(title = title, notes = notes)
+}
+
+private fun buildRecipeDeepLink(recipe: Recipe): String {
+  return Uri.Builder()
+    .scheme("recipecook")
+    .authority("recipe")
+    .appendPath("open")
+    .appendQueryParameter("title", recipe.title)
+    .appendQueryParameter("notes", recipe.notes)
+    .build()
+    .toString()
 }
 
 @Composable

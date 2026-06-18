@@ -39,5 +39,27 @@ class RecipeViewModelTest {
     assertNotNull(chosen)
     assertTrue(viewModel.recipes.contains(chosen))
   }
+
+  @Test
+  fun showRecipeFromDeepLink_addsAndSelectsRecipeWhenMissing() {
+    val viewModel = RecipeViewModel()
+    val initialCount = viewModel.recipes.size
+
+    viewModel.showRecipeFromDeepLink(Recipe("Shakshuka", "Eggs, tomatoes, peppers"))
+
+    assertEquals(initialCount + 1, viewModel.recipes.size)
+    assertEquals("Shakshuka", viewModel.selectedRecipe?.title)
+  }
+
+  @Test
+  fun showRecipeFromDeepLink_reusesExistingRecipeWithoutDuplicate() {
+    val viewModel = RecipeViewModel()
+    val initialCount = viewModel.recipes.size
+
+    viewModel.showRecipeFromDeepLink(Recipe("Spaghetti Carbonara", "Pasta, eggs, parmesan, pancetta"))
+
+    assertEquals(initialCount, viewModel.recipes.size)
+    assertEquals("Spaghetti Carbonara", viewModel.selectedRecipe?.title)
+  }
 }
 
