@@ -73,6 +73,17 @@ class RecipeViewModel(
     mutableSelectedContactIds.clear()
   }
 
+  fun setSelectedContactIds(contactIds: List<Int>) {
+    mutableSelectedContactIds.clear()
+    mutableSelectedContactIds.addAll(contactIds)
+    // Debug log to assist end-to-end testing: print selected ids and names
+    try {
+      android.util.Log.d("RecipeViewModel", "Selected contact ids: $contactIds")
+    } catch (_: Exception) {
+      // ignore logging errors in non-Android test environments
+    }
+  }
+
   fun loadContacts(repository: ContactsRepository) {
     if (isLoadingContacts || mutableContacts.isNotEmpty()) return
 
@@ -98,6 +109,16 @@ class RecipeViewModel(
 
   fun onPermissionDenied() {
     contactsPermissionGranted = false
+  }
+
+  // Test helper: add a fake contact to the in-memory list. This is used by the
+  // automated end-to-end flow when the device/emulator has no real contacts.
+  fun addTestContact(contact: Contact) {
+    mutableContacts.add(contact)
+    try {
+      android.util.Log.d("RecipeViewModel", "Added test contact: ${contact.name} (${contact.id})")
+    } catch (_: Exception) {
+    }
   }
 
   fun addRecipe(title: String, notes: String): Boolean {

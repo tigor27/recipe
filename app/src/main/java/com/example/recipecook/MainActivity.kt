@@ -1,6 +1,8 @@
+
 package com.example.recipecook
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -47,6 +49,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import android.net.Uri
+import android.telephony.SmsManager
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -58,16 +63,30 @@ class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
+    // Test hook: allow auto-selecting first contact when launching activity with
+    // intent extra "test_auto_select_first" (boolean). This is used for automated
+    // end-to-end testing where we want to simulate choosing a contact in the
+    // full-screen selector.
+    val testAutoSelectFirst = intent?.getBooleanExtra("test_auto_select_first", false) ?: false
+    val testAutoPickRandom = intent?.getBooleanExtra("test_auto_pick_random", false) ?: false
+
     setContent {
       MaterialTheme {
-        RecipeApp()
+        RecipeApp(
+          initialAutoSelectFirst = testAutoSelectFirst,
+          initialAutoPickRandom = testAutoPickRandom
+        )
       }
     }
   }
 }
 
 @Composable
-private fun RecipeApp(recipeViewModel: RecipeViewModel = viewModel()) {
+private fun RecipeApp(
+  recipeViewModel: RecipeViewModel = viewModel(),
+  initialAutoSelectFirst: Boolean = false,
+  initialAutoPickRandom: Boolean = false
+) {
   var newTitle by rememberSaveable { mutableStateOf("") }
   var newNotes by rememberSaveable { mutableStateOf("") }
   val snackbarHostState = remember { SnackbarHostState() }
@@ -87,7 +106,24 @@ private fun RecipeApp(recipeViewModel: RecipeViewModel = viewModel()) {
     )
   }
 
-  // Permission launcher
+  // Check if SEND_SMS permission is already granted
+  var hasSendSmsPermission by remember {
+    mutableStateOf(
+      ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.SEND_SMS
+      ) == PackageManager.PERMISSION_GRANTED
+    )
+  }
+
+  // Pending send data stored while requesting SEND_SMS permission
+  var pendingSendContacts by remember { mutableStateOf<List<Contact>?>(null) }
+  var pendingSendBody by remember { mutableStateOf<String?>(null) }
+
+  // Track which contact IDs have been sent to (for highlighting their chips)
+  var sentContactIds by remember { mutableStateOf<Set<Int>>(emptySet()) }
+
+  // Permission launcher for READ_CONTACTS
   val permissionLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.RequestPermission()
   ) { isGranted ->
@@ -100,11 +136,103 @@ private fun RecipeApp(recipeViewModel: RecipeViewModel = viewModel()) {
     }
   }
 
+  // SMS permission launcher: if granted, send programmatically; if denied, fallback to composer
+  val smsPermissionLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.RequestPermission()
+  ) { isGranted ->
+    hasSendSmsPermission = isGranted
+    if (isGranted) {
+      val contactsToSend = pendingSendContacts
+      val bodyToSend = pendingSendBody
+      if (!contactsToSend.isNullOrEmpty() && !bodyToSend.isNullOrBlank()) {
+        try {
+          val smsManager = SmsManager.getDefault()
+          for (c in contactsToSend) {
+            val phone = c.phone.ifBlank { null } ?: continue
+            val parts = smsManager.divideMessage(bodyToSend)
+            smsManager.sendMultipartTextMessage(phone, null, parts, null, null)
+          }
+          scope.launch {
+            val names = contactsToSend.joinToString(", ") { it.name }
+            snackbarHostState.showSnackbar("Sent \"${recipeViewModel.selectedRecipe?.title}\" to $names")
+            // Mark these contacts' chips as sent (highlight them)
+            sentContactIds = sentContactIds + contactsToSend.map { it.id }.toSet()
+          }
+        } catch (e: Exception) {
+          scope.launch {
+            snackbarHostState.showSnackbar("Failed to send SMS: ${e.message}")
+          }
+        }
+      }
+    } else {
+      // Permission denied: fallback to opening SMS composer with prefilled body
+      val contactsToSend = pendingSendContacts
+      val bodyToSend = pendingSendBody ?: ""
+      val recipients = contactsToSend?.mapNotNull { it.phone.ifBlank { null } }?.joinToString(";") ?: ""
+      val smsIntent = Intent(Intent.ACTION_SENDTO).apply {
+        data = Uri.parse("smsto:${Uri.encode(recipients)}")
+        putExtra("sms_body", bodyToSend)
+      }
+      try {
+        context.startActivity(smsIntent)
+        scope.launch {
+          val names = contactsToSend?.joinToString(", ") { it.name } ?: ""
+          snackbarHostState.showSnackbar("Opened SMS composer to share \"${recipeViewModel.selectedRecipe?.title}\" with $names")
+          // Mark these contacts' chips as sent (highlight them)
+          sentContactIds = sentContactIds + (contactsToSend?.map { it.id }?.toSet() ?: emptySet())
+        }
+      } catch (e: Exception) {
+        scope.launch {
+          snackbarHostState.showSnackbar("No SMS app available to send messages")
+        }
+      }
+    }
+
+    // Clear pending data
+    pendingSendContacts = null
+    pendingSendBody = null
+  }
+
+  // Activity launcher for SelectContactsActivity
+  val selectContactsLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.StartActivityForResult()
+  ) { result ->
+    if (result.resultCode == android.app.Activity.RESULT_OK) {
+      val selectedIds = result.data?.getIntegerArrayListExtra("selectedContactIds") ?: emptyList()
+      recipeViewModel.setSelectedContactIds(selectedIds)
+    }
+  }
+
   // Load contacts if permission is already granted
   LaunchedEffect(hasContactsPermission) {
     if (hasContactsPermission) {
       recipeViewModel.onPermissionGranted()
       recipeViewModel.loadContacts(contactsRepository)
+    }
+  }
+
+  // If running with the test flag, as soon as contacts are loaded select the first
+  // contact automatically. This makes it possible to run an automated end-to-end
+  // flow without manual UI interaction.
+  LaunchedEffect(initialAutoSelectFirst, recipeViewModel.contacts) {
+    if (initialAutoSelectFirst) {
+      if (recipeViewModel.contacts.isNotEmpty()) {
+        recipeViewModel.setSelectedContactIds(listOf(recipeViewModel.contacts.first().id))
+      } else {
+        // If there are no real contacts on the device/emulator, inject a test
+        // contact so the automated flow can proceed and the UI shows a selected
+        // first-name chip.
+        val testContact = Contact(id = -1, name = "Test User", phone = "+15550001111")
+        recipeViewModel.addTestContact(testContact)
+        recipeViewModel.setSelectedContactIds(listOf(testContact.id))
+      }
+    }
+  }
+
+  // Test hook: optionally auto pick a random recipe on startup
+  LaunchedEffect(initialAutoPickRandom) {
+    if (initialAutoPickRandom) {
+      recipeViewModel.chooseRandomRecipe()
     }
   }
 
@@ -209,6 +337,70 @@ private fun RecipeApp(recipeViewModel: RecipeViewModel = viewModel()) {
 
         Spacer(modifier = Modifier.height(12.dp))
 
+        // Select Contacts Button
+        Button(
+          onClick = {
+            if (!hasContactsPermission) {
+              permissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+            } else {
+              val intent = android.content.Intent(context, SelectContactsActivity::class.java)
+              selectContactsLauncher.launch(intent)
+            }
+          },
+          modifier = Modifier.fillMaxWidth()
+        ) {
+          Text("Select Contacts")
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Build the share handler here so it can capture 'recipe'
+        val shareClickHandler: () -> Unit = {
+          val selectedContacts = recipeViewModel.getSelectedContacts()
+          if (selectedContacts.isEmpty()) {
+            scope.launch {
+              snackbarHostState.showSnackbar("Select contacts to share with")
+            }
+          } else {
+            val phoneNumbers = selectedContacts.mapNotNull { it.phone.ifBlank { null } }
+            val body = buildString {
+              append("Recipe: ")
+              append(recipe.title)
+              if (recipe.notes.isNotBlank()) {
+                append("\n")
+                append(recipe.notes)
+              }
+            }
+
+            // If we already have SEND_SMS permission, send programmatically
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED) {
+              try {
+                val smsManager = SmsManager.getDefault()
+                for (phone in phoneNumbers) {
+                  val parts = smsManager.divideMessage(body)
+                  smsManager.sendMultipartTextMessage(phone, null, parts, null, null)
+                }
+                scope.launch {
+                  val names = selectedContacts.joinToString(", ") { it.name }
+                  snackbarHostState.showSnackbar("Sent \"${recipe.title}\" to $names")
+                  // Mark these contacts' chips as sent (highlight them)
+                  sentContactIds = sentContactIds + selectedContacts.map { it.id }.toSet()
+                }
+              } catch (e: Exception) {
+                scope.launch {
+                  snackbarHostState.showSnackbar("Failed to send SMS: ${e.message}")
+                }
+              }
+            } else {
+              // Save pending data and request SEND_SMS permission. The launcher will
+              // handle sending on grant or falling back to composer on denial.
+              pendingSendContacts = selectedContacts
+              pendingSendBody = body
+              smsPermissionLauncher.launch(Manifest.permission.SEND_SMS)
+            }
+          }
+        }
+
         // Contacts sharing section
         ContactsShareSection(
           contacts = recipeViewModel.contacts,
@@ -219,19 +411,11 @@ private fun RecipeApp(recipeViewModel: RecipeViewModel = viewModel()) {
           onRequestPermission = {
             permissionLauncher.launch(Manifest.permission.READ_CONTACTS)
           },
-          onShareClick = {
-            val selectedContacts = recipeViewModel.getSelectedContacts()
-            if (selectedContacts.isNotEmpty()) {
-              scope.launch {
-                val names = selectedContacts.joinToString(", ") { it.name }
-                snackbarHostState.showSnackbar("Shared \"${recipe.title}\" with $names")
-                recipeViewModel.clearContactSelection()
-              }
-            } else {
-              scope.launch {
-                snackbarHostState.showSnackbar("Select contacts to share with")
-              }
-            }
+          onShareClick = shareClickHandler,
+          sentContactIds = sentContactIds,
+          onClearContacts = {
+            recipeViewModel.clearContactSelection()
+            sentContactIds = emptySet()
           }
         )
 
@@ -280,7 +464,9 @@ private fun ContactsShareSection(
   isLoading: Boolean,
   hasPermission: Boolean,
   onRequestPermission: () -> Unit,
-  onShareClick: () -> Unit
+  onShareClick: () -> Unit,
+  sentContactIds: Set<Int>,
+  onClearContacts: () -> Unit
 ) {
   Card(
     modifier = Modifier.fillMaxWidth(),
@@ -339,29 +525,64 @@ private fun ContactsShareSection(
           )
         }
         else -> {
-          // Show contacts list
-          LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-          ) {
-            items(contacts) { contact ->
-              ContactChip(
-                contact = contact,
-                isSelected = isContactSelected(contact.id),
-                onToggle = { onContactToggle(contact.id) }
-              )
+          // Show only selected contacts (first names)
+          val selected = contacts.filter { isContactSelected(it.id) }
+
+          if (selected.isEmpty()) {
+            Text(
+              text = "No contacts selected",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+          } else {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+              items(selected) { contact ->
+                val firstName = contact.name.split(Regex("\\s+")).firstOrNull().orEmpty()
+                val isSent = contact.id in sentContactIds
+                SelectedContactChip(firstName = firstName, isSent = isSent)
+              }
             }
-          }
 
-          Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-          Button(
-            onClick = onShareClick,
-            modifier = Modifier.fillMaxWidth()
-          ) {
-            Text("Share Recipe")
+            Button(
+              onClick = onShareClick,
+              modifier = Modifier.fillMaxWidth()
+            ) {
+              Text("Share Recipe")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+              onClick = onClearContacts,
+              modifier = Modifier.fillMaxWidth()
+            ) {
+              Text("Clear contacts")
+            }
           }
         }
       }
+    }
+  }
+}
+
+@Composable
+private fun SelectedContactChip(firstName: String, isSent: Boolean = false) {
+  Card(
+    colors = CardDefaults.cardColors(
+      containerColor = if (isSent) Color.Yellow else MaterialTheme.colorScheme.surface
+    ),
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Text(
+        text = firstName.ifBlank { "Unnamed" },
+        style = MaterialTheme.typography.bodyMedium,
+        fontWeight = FontWeight.Medium
+      )
     }
   }
 }
@@ -407,6 +628,5 @@ private fun ContactChip(
     }
   }
 }
-
 
 
