@@ -61,6 +61,8 @@ import kotlinx.coroutines.launch
 
 private const val RECIPE_CUSTOM_SCHEME = "recipecook"
 private const val RECIPE_CUSTOM_HOST = "recipe"
+private const val RECIPE_HTTPS_SCHEME = "https"
+private const val RECIPE_HTTPS_HOST = "iicloud.tech"
 private const val RECIPE_OPEN_PATH = "/open"
 
 class MainActivity : ComponentActivity() {
@@ -487,8 +489,12 @@ private fun parseRecipeFromIntent(intent: Intent?): Recipe? {
     data.scheme == RECIPE_CUSTOM_SCHEME &&
       data.host == RECIPE_CUSTOM_HOST &&
       data.path?.startsWith(RECIPE_OPEN_PATH) == true
+  val isHttpsLink =
+    data.scheme == RECIPE_HTTPS_SCHEME &&
+      data.host == RECIPE_HTTPS_HOST &&
+      data.path?.startsWith(RECIPE_OPEN_PATH) == true
 
-  if (!isCustomSchemeLink) return null
+  if (!isCustomSchemeLink && !isHttpsLink) return null
 
   val title = data.getQueryParameter("title")?.trim().orEmpty()
   if (title.isBlank()) return null
@@ -499,8 +505,8 @@ private fun parseRecipeFromIntent(intent: Intent?): Recipe? {
 
 private fun buildRecipeDeepLink(recipe: Recipe): String {
   return Uri.Builder()
-    .scheme(RECIPE_CUSTOM_SCHEME)
-    .authority(RECIPE_CUSTOM_HOST)
+    .scheme(RECIPE_HTTPS_SCHEME)
+    .authority(RECIPE_HTTPS_HOST)
     .appendPath("open")
     .appendQueryParameter("title", recipe.title)
     .appendQueryParameter("notes", recipe.notes)
