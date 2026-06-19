@@ -503,16 +503,16 @@ private fun parseRecipeFromIntent(intent: Intent?): Recipe? {
   return Recipe(title = title, notes = notes)
 }
 
-private fun buildRecipeDeepLink(recipe: Recipe): String {
-  return Uri.Builder()
-    .scheme(RECIPE_HTTPS_SCHEME)
-    .authority(RECIPE_HTTPS_HOST)
-    .appendPath("open")
-    .appendQueryParameter("title", recipe.title)
-    .appendQueryParameter("notes", recipe.notes)
-    .build()
-    .toString()
-}
+ private fun buildRecipeDeepLink(recipe: Recipe): String {
+   return Uri.Builder()
+     .scheme(RECIPE_CUSTOM_SCHEME)
+     .authority(RECIPE_CUSTOM_HOST)
+     .appendPath("open")
+     .appendQueryParameter("title", recipe.title)
+     .appendQueryParameter("notes", recipe.notes)
+     .build()
+     .toString()
+ }
 
 @Composable
 private fun ContactsShareSection(
