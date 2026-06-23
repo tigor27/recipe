@@ -21,7 +21,8 @@ data class Contact(
 )
 
 class RecipeViewModel(
-  private val random: Random = Random.Default
+  private val random: Random = Random.Default,
+  private val selectedContactIdsStorage: SelectedContactIdsStorage = NoOpSelectedContactIdsStorage
 ) : ViewModel() {
 
   private val mutableRecipes = mutableStateListOf(
@@ -50,6 +51,10 @@ class RecipeViewModel(
 
   private val mutableSelectedContactIds = mutableStateListOf<Int>()
 
+  init {
+    mutableSelectedContactIds.addAll(selectedContactIdsStorage.load())
+  }
+
   val selectedContactIds: List<Int>
     get() = mutableSelectedContactIds
 
@@ -59,6 +64,7 @@ class RecipeViewModel(
     } else {
       mutableSelectedContactIds.add(contactId)
     }
+    persistSelectedContactIds()
   }
 
   fun isContactSelected(contactId: Int): Boolean {
@@ -71,11 +77,13 @@ class RecipeViewModel(
 
   fun clearContactSelection() {
     mutableSelectedContactIds.clear()
+    selectedContactIdsStorage.clear()
   }
 
   fun setSelectedContactIds(contactIds: List<Int>) {
     mutableSelectedContactIds.clear()
-    mutableSelectedContactIds.addAll(contactIds)
+    mutableSelectedContactIds.addAll(contactIds.distinct())
+    persistSelectedContactIds()
     // Debug log to assist end-to-end testing: print selected ids and names
     try {
       android.util.Log.d("RecipeViewModel", "Selected contact ids: $contactIds")
@@ -121,6 +129,22 @@ class RecipeViewModel(
     }
   }
 
+  private fun persistSelectedContactIds() {
+    selectedContactIdsStorage.save(mutableSelectedContactIds.toList())
+  }
+
+  private object NoOpSelectedContactIdsStorage : SelectedContactIdsStorage {
+    override fun load(): List<Int> = emptyList()
+
+    override fun save(contactIds: List<Int>) {
+      // No-op default for tests/previews that do not provide persistence.
+    }
+
+    override fun clear() {
+      // No-op default for tests/previews that do not provide persistence.
+    }
+  }
+
   fun addRecipe(title: String, notes: String): Boolean {
     val cleanTitle = title.trim()
     val cleanNotes = notes.trim()
@@ -141,6 +165,10 @@ class RecipeViewModel(
 
     selectedRecipe = mutableRecipes[random.nextInt(mutableRecipes.size)]
     return selectedRecipe
+  }
+
+  fun selectRecipe(recipe: Recipe) {
+    selectedRecipe = recipe
   }
 
   fun showRecipeFromDeepLink(recipe: Recipe) {

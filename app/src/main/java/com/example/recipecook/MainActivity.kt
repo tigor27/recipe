@@ -21,10 +21,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -56,6 +56,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 
@@ -99,7 +101,6 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun RecipeApp(
-  recipeViewModel: RecipeViewModel = viewModel(),
   initialAutoSelectFirst: Boolean = false,
   initialAutoPickRandom: Boolean = false,
   deepLinkRecipe: Recipe? = null
@@ -109,9 +110,26 @@ private fun RecipeApp(
   val snackbarHostState = remember { SnackbarHostState() }
   val scope = rememberCoroutineScope()
   val context = LocalContext.current
+  val selectedContactIdsStorage = remember(context) {
+    SharedPrefsSelectedContactIdsStorage(context.applicationContext)
+  }
+  val recipeViewModel: RecipeViewModel = viewModel(
+    factory = remember(selectedContactIdsStorage) {
+      object : ViewModelProvider.Factory {
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+          if (modelClass.isAssignableFrom(RecipeViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            return RecipeViewModel(selectedContactIdsStorage = selectedContactIdsStorage) as T
+          }
+          throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
+        }
+      }
+    }
+  )
 
   // Contacts repository
   val contactsRepository = remember { ContactsRepository(context.contentResolver) }
+  val smsInboxRepository = remember { SmsInboxRepository(context.contentResolver) }
 
   // Check if permission is already granted
   var hasContactsPermission by remember {
@@ -129,6 +147,16 @@ private fun RecipeApp(
       ContextCompat.checkSelfPermission(
         context,
         Manifest.permission.SEND_SMS
+      ) == PackageManager.PERMISSION_GRANTED
+    )
+  }
+
+  // Check if READ_SMS permission is already granted
+  var hasReadSmsPermission by remember {
+    mutableStateOf(
+      ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.READ_SMS
       ) == PackageManager.PERMISSION_GRANTED
     )
   }
@@ -210,6 +238,13 @@ private fun RecipeApp(
     pendingSendBody = null
   }
 
+  // SMS read permission launcher: used to import unread recipe messages on startup.
+  val readSmsPermissionLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.RequestPermission()
+  ) { isGranted ->
+    hasReadSmsPermission = isGranted
+  }
+
   // Activity launcher for SelectContactsActivity
   val selectContactsLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.StartActivityForResult()
@@ -225,6 +260,24 @@ private fun RecipeApp(
     if (hasContactsPermission) {
       recipeViewModel.onPermissionGranted()
       recipeViewModel.loadContacts(contactsRepository)
+    }
+  }
+
+  // On startup, request SMS read permission so unread recipe messages can be imported.
+  LaunchedEffect(Unit) {
+    if (!hasReadSmsPermission) {
+      readSmsPermissionLauncher.launch(Manifest.permission.READ_SMS)
+    }
+  }
+
+  // Prefill fields from the latest unread recipe message, if available.
+  LaunchedEffect(hasReadSmsPermission) {
+    if (hasReadSmsPermission) {
+      val incomingRecipeMessage = smsInboxRepository.getLatestUnreadRecipeMessage()
+      if (incomingRecipeMessage != null) {
+        newTitle = incomingRecipeMessage.title
+        newNotes = incomingRecipeMessage.ingredients
+      }
     }
   }
 
@@ -258,14 +311,24 @@ private fun RecipeApp(
     deepLinkRecipe?.let { recipeViewModel.showRecipeFromDeepLink(it) }
   }
 
+  // Keep input fields in sync with the currently selected recipe.
+  LaunchedEffect(recipeViewModel.selectedRecipe) {
+    recipeViewModel.selectedRecipe?.let { selected ->
+      newTitle = selected.title
+      newNotes = selected.notes
+    }
+  }
+
   Scaffold(
     snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
   ) { innerPadding ->
+    val screenScrollState = rememberScrollState()
     Column(
       modifier = Modifier
         .fillMaxSize()
         .padding(innerPadding)
         .padding(16.dp)
+        .verticalScroll(screenScrollState)
     ) {
       Text(
         text = "Recipe Cook",
@@ -386,15 +449,15 @@ private fun RecipeApp(
           } else {
             val phoneNumbers = selectedContacts.mapNotNull { it.phone.ifBlank { null } }
             val body = buildString {
-              append("Recipe: ")
+              append("Open this recipe")
+              append("\n")
+              append("Name:")
               append(recipe.title)
-              if (recipe.notes.isNotBlank()) {
-                append("\n")
-                append(recipe.notes)
-              }
+              append("\n")
+              append("Ingredients:")
+              append(recipe.notes)
               append("\n\n")
               append(buildRecipeDeepLink(recipe))
-              append("\n\nTap link above to open in Recipe app. (Select Recipe Cook if prompted.)")
             }
 
             // If we already have SEND_SMS permission, send programmatically
@@ -455,11 +518,20 @@ private fun RecipeApp(
 
       Spacer(modifier = Modifier.height(8.dp))
 
-      LazyColumn(
+      Column(
         verticalArrangement = Arrangement.spacedBy(8.dp)
       ) {
-        itemsIndexed(recipeViewModel.recipes) { index, recipe ->
-          Card(modifier = Modifier.fillMaxWidth()) {
+        recipeViewModel.recipes.forEachIndexed { index, recipe ->
+          val isSelectedRecipe = recipeViewModel.selectedRecipe === recipe
+          Card(
+            modifier = Modifier
+              .fillMaxWidth()
+              .clickable { recipeViewModel.selectRecipe(recipe) },
+            colors = CardDefaults.cardColors(
+              containerColor = if (isSelectedRecipe) Color(0xFF424242) else MaterialTheme.colorScheme.surface,
+              contentColor = if (isSelectedRecipe) Color(0xFFF5F5F5) else MaterialTheme.colorScheme.onSurface
+            )
+          ) {
             Column(modifier = Modifier.padding(12.dp)) {
               Text(
                 text = "${index + 1}. ${recipe.title}",
@@ -508,8 +580,8 @@ private fun parseRecipeFromIntent(intent: Intent?): Recipe? {
      .scheme(RECIPE_CUSTOM_SCHEME)
      .authority(RECIPE_CUSTOM_HOST)
      .appendPath("open")
-     .appendQueryParameter("title", recipe.title)
-     .appendQueryParameter("notes", recipe.notes)
+//     .appendQueryParameter("title", recipe.title)
+//     .appendQueryParameter("notes", recipe.notes)
      .build()
      .toString()
  }

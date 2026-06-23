@@ -9,6 +9,27 @@ import org.junit.Test
 
 class RecipeViewModelTest {
 
+  private class FakeSelectedContactIdsStorage(
+    initialIds: List<Int> = emptyList()
+  ) : SelectedContactIdsStorage {
+    private var storedIds: List<Int> = initialIds
+    var clearCalled = false
+      private set
+
+    override fun load(): List<Int> = storedIds
+
+    override fun save(contactIds: List<Int>) {
+      storedIds = contactIds
+    }
+
+    override fun clear() {
+      clearCalled = true
+      storedIds = emptyList()
+    }
+
+    fun snapshot(): List<Int> = storedIds
+  }
+
   @Test
   fun addRecipe_requiresNonBlankTitle() {
     val viewModel = RecipeViewModel()
@@ -60,6 +81,41 @@ class RecipeViewModelTest {
 
     assertEquals(initialCount, viewModel.recipes.size)
     assertEquals("Spaghetti Carbonara", viewModel.selectedRecipe?.title)
+  }
+
+  @Test
+  fun selectRecipe_setsSelectedRecipe() {
+    val viewModel = RecipeViewModel()
+    val recipe = viewModel.recipes.first()
+
+    viewModel.selectRecipe(recipe)
+
+    assertEquals(recipe, viewModel.selectedRecipe)
+  }
+
+  @Test
+  fun selectedContacts_loadsPersistedIdsOnInit() {
+    val storage = FakeSelectedContactIdsStorage(initialIds = listOf(4, 9))
+
+    val viewModel = RecipeViewModel(selectedContactIdsStorage = storage)
+
+    assertEquals(listOf(4, 9), viewModel.selectedContactIds)
+  }
+
+  @Test
+  fun selectedContacts_persistsOnToggleAndClear() {
+    val storage = FakeSelectedContactIdsStorage()
+    val viewModel = RecipeViewModel(selectedContactIdsStorage = storage)
+
+    viewModel.toggleContactSelection(15)
+    assertEquals(listOf(15), storage.snapshot())
+
+    viewModel.toggleContactSelection(28)
+    assertEquals(listOf(15, 28), storage.snapshot())
+
+    viewModel.clearContactSelection()
+    assertTrue(storage.clearCalled)
+    assertTrue(storage.snapshot().isEmpty())
   }
 }
 
